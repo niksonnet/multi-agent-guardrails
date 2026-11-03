@@ -5,18 +5,21 @@ Each step adds one idea to a small travel planner.
 
 ## Setup
 
+You need Python 3.10+, [uv](https://docs.astral.sh/uv/) and a free Groq API key from [console.groq.com](https://console.groq.com/keys).
+
 ```bash
 uv sync
 ```
 
-Create a file called `.env` with your Groq key:
+Create a file called `.env` in the repo root:
 
 ```
 GROQ_API_KEY=your_key
 APP_PASSKEY=choose_a_passkey
 ```
 
-The app asks for `APP_PASSKEY` before showing the chat, so nobody without it can use your Groq quota. If it isn't set, the app stays locked.
+- `GROQ_API_KEY` is needed by every step and the app.
+- `APP_PASSKEY` is only for the app: it asks for it before showing the chat, so nobody without it can use your Groq quota. If it isn't set, the app stays locked. After changing `.env`, restart the app.
 
 `.env` holds your secrets and must never be committed. `.gitignore` skips it, and a pre-commit hook blocks it even with `git add -f`. Turn the hook on once after cloning:
 
@@ -57,7 +60,7 @@ ui/             # app helpers, one job each:
 | 8 | `steps/step8_orchestration.py` | **Orchestration**: the same agents run three ways: LLM with handoffs, LLM with agents as tools, and code. Running it compares them |
 | 9 | `steps/step9_memory.py` | **Memory**: a conversation where the details come one message at a time. Without a session it never gets a plan; with `SQLiteSession` it does |
 | — | `steps/demo.py` | Steps 1–5 together |
-| — | `app.py` | The demo app (~70 lines, read top to bottom: settings → page → run the agents → log). A chat on the left; on the right a live **Behind the scenes** panel showing each agent, model call, tool call, handoff, guardrail, code decision and memory step (built with `RunHooks`). The sidebar switches data, orchestration, memory and (under Advanced) models; the log of each run can be copied or downloaded |
+| — | `app.py` | The demo app (~75 lines, read top to bottom: passkey → settings → page → run the agents → log). A chat on the left; on the right a live **Behind the scenes** panel showing each agent, model call, tool call, handoff, guardrail, code decision and memory step (built with `RunHooks`). The sidebar switches data, orchestration, memory and (under Advanced) models; the log of each run can be copied or downloaded |
 
 Run everything from the repo root:
 
@@ -67,7 +70,7 @@ uv run python -m steps.demo
 uv run streamlit run app.py
 ```
 
-`core/config.py` connects to Groq. Every step imports `model` from it.
+`core/config.py` connects to Groq and holds the models. Steps 1–5 use `model`; from step 6 each agent gets `fast_model`, `structured_model` or `smart_model`.
 
 ## Orchestration: who decides what runs next? (step 8)
 
@@ -95,7 +98,7 @@ In code mode a Router agent only *reads* the request (`output_type=Route`) and a
 
 ## Real travel data (step 7)
 
-Add the keys to `.env`. Only `SERPAPI_KEY` is needed; each missing optional key switches its feature off.
+All these keys are optional: add them to `.env` for real prices. Without `SERPAPI_KEY` the app uses the sample data; each other missing key switches its feature off.
 
 | Key | Used for | Free allowance |
 |---|---|---|
@@ -110,7 +113,9 @@ Add the keys to `.env`. Only `SERPAPI_KEY` is needed; each missing optional key 
 
 ## Things to know about Groq
 
-- **Model:** the default is `qwen/qwen3.8-27b`. `gpt-oss` models often fail with `json_validate_failed` when you use structured output.
+- **Models:** the default `model` is `openai/gpt-oss-120b` (change it with `GROQ_MODEL` in `.env`). Agents with structured output use `qwen/qwen3.8-27b`, because `gpt-oss` models often fail with `json_validate_failed`.
+- **Broken model output:** sometimes a model writes a broken tool call or broken JSON and Groq rejects it (`tool_use_failed`, `json_validate_failed`). `retry_config` in `core/config.py` retries these up to 2 times. A guardrail's checker agent is a separate run, so it gets `run_config=retry_config` too.
+- **Forced tool calls:** with `tool_choice="required"`, a model that needs to ask the user a question can't, and Groq rejects the run. So the Flight and Hotel agents may ask for a missing city instead of always calling a tool.
 - **Handoffs need an argument:** Groq rejects handoffs that take no arguments, so each handoff asks for a `reason` (see step 3).
-- **Tools or structured output, not both:** one agent can't use tools and `output_type` together on Groq. That's why the Trip Planner gets the prices in its instructions instead of calling tools.
-- **Rate limit:** the free plan has a limit on tokens per minute. If you hit it, the client waits and tries again.
+- **Tools or structured output, not both:** one agent can't use tools and `output_type` together on Groq. In step 4 the Trip Planner gets the prices in its instructions; in step 7 a Trip Planner calls the tools and a Plan Writer writes the JSON.
+- **Rate limit:** the free plan limits tokens per minute (qwen's output limit is the easiest to hit). The client waits and tries again; in a demo, leave a few seconds between requests.

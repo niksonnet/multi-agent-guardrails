@@ -1,3 +1,6 @@
 title: Guardrails for Multi-Agent AI
 description: Building a travel planner that can't make up prices, with the OpenAI Agents SDK on Groq
 theme: jekyll-theme-cayman
+# The theme shows the article's first heading in the banner; drop it from the body so it isn't shown twice.
+titles_from_headings:
+  strip_title: true

@@ -119,3 +119,7 @@ All these keys are optional: add them to `.env` for real prices. Without `SERPAP
 - **Handoffs need an argument:** Groq rejects handoffs that take no arguments, so each handoff asks for a `reason` (see step 3).
 - **Tools or structured output, not both:** one agent can't use tools and `output_type` together on Groq. In step 4 the Trip Planner gets the prices in its instructions; in step 7 a Trip Planner calls the tools and a Plan Writer writes the JSON.
 - **Rate limit:** the free plan limits tokens per minute (qwen's output limit is the easiest to hit). The client waits and tries again; in a demo, leave a few seconds between requests.
+
+## License
+
+Copyright 2026 Nikunj. Licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE).

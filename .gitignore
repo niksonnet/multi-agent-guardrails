@@ -150,7 +150,11 @@ activemq-data/
 *.sage.py
 
 # Environments
+# Secrets: never commit .env or variants like .env.local (only a key-free .env.example is allowed).
+# .githooks/pre-commit also blocks them, even with `git add -f`.
 .env
+.env.*
+!.env.example
 .envrc
 .venv
 env/
@@ -218,3 +222,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Claude Code (personal tool settings and skills)
+.claude/

@@ -4,7 +4,7 @@ layout: default
 
 # A rule in code, not a hope in a prompt
 
-Ask a language model to plan a trip and return the plan as JSON, and it will. Every field is filled in: destination, airline, hotel, budget. It fills them in even when you never said where you're going or how much you want to spend, because a structured output *forces* the model to put something in every field. So it invents.
+Ask a language model to plan a trip and return the plan as JSON, and it will. Every field is filled in: destination, airline, hotel, budget. It can fill them in even when you never said where you're going or how much you want to spend, because a structured output *forces* the model to put something in every field. So it may invent.
 
 That one observation is the reason this project exists. [**multi-agent-guardrails**](https://github.com/niksonnet/multi-agent-guardrails) is a small travel planner built in nine steps with the [OpenAI Agents SDK](https://openai.github.io/openai-agents-python/), running on [Groq](https://console.groq.com/)'s free tier. Each step adds one idea, and by step 5 the agents are wrapped in guardrails that check what goes in and what comes out.
 
@@ -19,7 +19,18 @@ This article walks through the path, with most of the attention on the guardrail
 git clone https://github.com/niksonnet/multi-agent-guardrails
 cd multi-agent-guardrails
 uv sync
-echo "GROQ_API_KEY=your_key" > .env
+```
+
+Create a file called `.env` in the repo root:
+
+```
+GROQ_API_KEY=your_key
+APP_PASSKEY=choose_a_passkey
+```
+
+`APP_PASSKEY` is only for the demo app: it asks for it before showing the chat, so nobody else can use your Groq quota. Then run the first step:
+
+```bash
 uv run python -m steps.step1_basic_agent
 ```
 
@@ -77,7 +88,7 @@ class TripPlan(BaseModel):
     summary: str
 ```
 
-This is where the problem from the introduction shows up. Ask *"Plan a trip to Goa."* with no budget, and the planner still returns a complete `TripPlan`, budget included.
+This is where the problem from the introduction shows up. Ask *"Plan a trip to Goa."* with no budget, and the planner still has to return a complete `TripPlan`, so it may make up a budget and prices.
 
 ## Step 5: guardrails
 
@@ -88,7 +99,7 @@ A guardrail is a check that runs alongside an agent. If it trips, the SDK stops 
 
 ### Input: is this even about travel?
 
-The input guardrail uses a second, tiny agent whose only job is to classify the message. It returns JSON, so it runs on the model that is most reliable at structured output.
+The input guardrail uses a second, tiny agent whose only job is to classify the message. It returns JSON, so it runs on the model that is most reliable at structured output. (Shortened here; the full version in the repo also handles conversation history, covered in step 9.)
 
 ```python
 class TravelCheck(BaseModel):
@@ -162,14 +173,14 @@ safe_planner = planner_agent.clone(
 )
 ```
 
-Running step 5 tries four requests:
+Running step 5 tries four requests. The expected results (models vary a little from run to run):
 
-| Request | Result |
+| Request | Expected result |
 |---|---|
-| Delhi → Dubai, 3 nights, budget $1000 | ✅ Plan returned |
+| Delhi → Dubai, 3 nights, budget $1000 | ✅ Plan returned ($250 flight + 3 × $90 hotel = $520) |
 | "Write me a poem about cats." | 🛑 Blocked by `travel_only` |
-| Delhi → Paris, 5 nights, budget $300 | 🛑 Blocked by `within_budget` |
-| "Plan a trip to Goa." | 🛑 Blocked by `grounded_plan`: no prices for Goa, no budget given |
+| Delhi → Paris, 5 nights, budget $300 | 🛑 Blocked by `within_budget`: the cheapest trip is $650 + 5 × $95 = $1125 |
+| "Plan a trip to Goa." | 🛑 Blocked by an output guardrail: `grounded_plan` finds no prices for Goa and no budget in the request |
 
 Two of the three guardrails are plain Python. That's the theme of the whole project: **if a rule can be written as code, write it as code.** Use a model only for the judgement calls code can't make, like "is this about travel?"
 
@@ -178,13 +189,14 @@ Two of the three guardrails are plain Python. That's the theme of the whole proj
 Not every agent needs the biggest model. Routing a request and making one tool call are easy; producing valid JSON reliably is a specific skill.
 
 ```python
-MULTI_MODEL = {
-    "triage": fast_model,       # gpt-oss-20b: picks 1 of 3 handoffs
-    "flight": fast_model,       # 1 tool call + short answer
-    "hotel": fast_model,
-    "planner": structured_model # qwen: reliable at TripPlan JSON
-}
+#   Triage  -> picks 1 of 3 handoffs      -> small + fast
+#   Flight  -> 1 tool call + short answer -> small + fast
+#   Hotel   -> 1 tool call + short answer -> small + fast
+#   Planner -> maths + TripPlan JSON      -> reliable at structured output
+MULTI_MODEL = {"triage": fast_model, "flight": fast_model, "hotel": fast_model, "planner": structured_model}
 ```
+
+In `core/config.py`, `fast_model` is `gpt-oss-20b` and `structured_model` is `qwen3.8-27b`.
 
 Running step 6 benchmarks this against using a single model everywhere, comparing passes, time and tokens.
 
@@ -192,7 +204,7 @@ Running step 6 benchmarks this against using a single model everywhere, comparin
 
 With mock data, prices are easy to check. Step 7 swaps in live flight and hotel prices (SerpAPI, with fallbacks down to the mock data) and splits the work into a Trip Planner that calls the tools and a Plan Writer that writes the JSON.
 
-The trick is the **run context**: the tool that fetches the data also saves exactly what it fetched, and the output guardrail checks the final plan against that, with no new API calls.
+The trick is the **run context**: the tool that fetches the data also saves exactly what it fetched, and the output guardrail checks the final plan against that, with no new API calls. (Shortened; `...` marks omitted code.)
 
 ```python
 @function_tool
@@ -252,7 +264,8 @@ Real users don't give every detail at once:
 Without memory, each message stands alone and the planner never has enough to work with. With a session, the SDK loads earlier messages, runs the agents, and saves the new turn:
 
 ```python
-result = await Runner.run(team, message, session=SQLiteSession("user-123"), run_config=memory_config)
+session = SQLiteSession("user-123")
+result = await Runner.run(team, message, session=session, run_config=memory_config)
 ```
 
 Memory has a knock-on effect on guardrails. Taken on its own, *"My budget is $1000."* doesn't look like travel. So `travel_only` checks the newest message but shows the checker the earlier ones, and a follow-up in a travel conversation counts as travel.
@@ -269,7 +282,7 @@ Free and fast comes with some sharp edges. Each one is handled in the repo:
 
 ## The demo app
 
-`uv run streamlit run app.py` starts a chat with a live **Behind the scenes** panel next to it, showing each agent, model call, tool call, handoff, guardrail, code decision and memory step as it happens. The sidebar switches between mock and real data, the three orchestration modes, memory on or off, and the models. The app itself is about 75 lines, readable top to bottom.
+`uv run streamlit run app.py` asks for your `APP_PASSKEY`, then starts a chat with a live **Behind the scenes** panel next to it, showing each agent, model call, tool call, handoff, guardrail, code decision and memory step as it happens. The sidebar switches between mock and real data, the three orchestration modes, memory on or off, and the models. The app itself is about 75 lines, readable top to bottom.
 
 <!-- TODO: add a screenshot of the app here -->
 
